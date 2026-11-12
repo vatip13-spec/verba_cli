@@ -14,7 +14,7 @@ import { escapeCodeTranslation } from './code-content.js';
 import { deepseekKoreanEnabled, deepseekKoreanPrompt } from './deepseek-korean.js';
 import { buildBilingualVerdictPrompt, bilingualPromptsNeedingVerdict, resolveBilingualIntent } from './bilingual-intent.js';
 import { reconcileCompletedResult, compatibleCompletedSource, hasVerifiedSceneReport } from './server-result-compat.js?v=2';
-import { createServerClient } from './server-client.js?v=0.6.143';
+import { createServerClient } from './server-client.js?v=0.6.143-cli.1';
 import { createAutomaticOutputLifecycle } from './automatic-output.js?v=0.6.61';
 import { createSourceChangeTracer } from './source-change-tracer.js?v=0.6.66';
 import { createBrowserExecutionDiagnostics } from './browser-execution-diagnostics.js?v=0.6.66';
@@ -80,9 +80,9 @@ import {
 } from './core.js';
 
 const EXTENSION_KEY = 'verba';
-const EXTENSION_VERSION = '0.6.143';
+const EXTENSION_VERSION = '0.6.143-cli.1';
 // Browser and server must use the same isolated translation prompt pipeline.
-const SERVER_ENGINE_VERSION = '0.6.143';
+const SERVER_ENGINE_VERSION = '0.6.143-cli.1';
 const DEVELOPER_ACCESS_CODE = '130918';
 const DEVELOPER_ACCESS_FINGERPRINT = `verba-dev-${hashText(DEVELOPER_ACCESS_CODE)}`;
 const noticeUI = createNoticeUI({ prefix: EXTENSION_KEY, title: '베르바' });
@@ -373,6 +373,9 @@ function normalizeCustomTranslatorSettings(rawTemplates = {}, rawModified = {}) 
 const DEFAULT_SETTINGS = {
     serverTranslation: false,
     translationEngine: 'ai',
+    codexCliEnabled: false,
+    codexCliModel: '',
+    codexCliReasoning: '',
     profileId: '',
     fallbackProfileId: '',
     thirdProfileId: '',
@@ -3063,7 +3066,7 @@ function profileList() {
 }
 
 function googleFreeEngineEnabled() {
-    return settings.translationEngine === 'google-free';
+    return settings.codexCliEnabled !== true && settings.translationEngine === 'google-free';
 }
 
 function aiTranslationEngineEnabled() {
@@ -3119,21 +3122,101 @@ function refreshProfileSelect() {
     renderProfileStats();
 }
 
+let codexCatalog;
+let codexCatalogRequest;
+
+async function codexCliApi(path, body, signal) {
+    const response = await fetch(`/api/plugins/verba-server/codex/${path}`, {
+        method: body ? 'POST' : 'GET',
+        headers: liveContext().getRequestHeaders(),
+        body: body ? JSON.stringify(body) : undefined,
+        signal,
+        cache: 'no-store',
+    });
+    const result = await response.json().catch(() => ({}));
+    if (!response.ok) {
+        const message = response.status === 404
+            ? 'CLI 포크에 포함된 Verba 서버 플러그인을 설치하고 실리태번을 재시작해 주세요.'
+            : result.error || `Codex CLI 요청 실패 (HTTP ${response.status})`;
+        throw Object.assign(new Error(message), { status: response.status });
+    }
+    return result;
+}
+
+function sendCodexRequest(prompt, { signal, model, reasoning }) {
+    return codexCliApi('translate', { prompt, model, reasoning }, signal);
+}
+
+function renderCodexChoices(root) {
+    const model = root.querySelector('#verba-codex-model');
+    const reasoning = root.querySelector('#verba-codex-reasoning');
+    if (!model || !reasoning) return;
+    const models = codexCatalog || [];
+    const selectedModel = String(settings.codexCliModel || '');
+    const selectedEffort = String(settings.codexCliReasoning || '');
+    const defaultModel = models.find(item => item.isDefault);
+    model.replaceChildren(new Option(defaultModel ? `CLI 기본 모델 (${defaultModel.id})` : 'CLI 기본 모델', ''));
+    for (const item of models) model.add(new Option(item.id, item.id));
+    if (selectedModel && !models.some(item => item.id === selectedModel)) {
+        model.add(new Option(`${selectedModel} (저장된 선택)`, selectedModel));
+    }
+    model.value = selectedModel;
+    const efforts = (models.find(item => item.id === selectedModel) || (!selectedModel && defaultModel))?.efforts || [];
+    reasoning.replaceChildren(new Option('모델 기본값', ''));
+    for (const effort of efforts) reasoning.add(new Option(effort, effort));
+    if (selectedEffort && !efforts.includes(selectedEffort)) {
+        reasoning.add(new Option(`${selectedEffort} (저장된 선택)`, selectedEffort));
+    }
+    reasoning.value = selectedEffort;
+}
+
+async function loadCodexChoices(root) {
+    const status = root.querySelector('#verba-codex-catalog-status');
+    if (codexCatalog || !status) return;
+    status.textContent = 'Codex CLI 모델 목록을 불러오는 중…';
+    try {
+        if (!codexCatalogRequest) {
+            codexCatalogRequest = codexCliApi('models').then(result => {
+                if (!Array.isArray(result.models)) throw new Error('Codex CLI 모델 목록을 받지 못했습니다.');
+                codexCatalog = result.models;
+            }).finally(() => { codexCatalogRequest = undefined; });
+        }
+        await codexCatalogRequest;
+        renderCodexChoices(root);
+        status.textContent = codexCatalog.length ? '' : '이 CLI에서 선택 가능한 GPT 모델을 찾지 못했습니다.';
+    } catch (error) {
+        status.textContent = errorText(error);
+    }
+}
+
 function syncTranslationEngineUi(root = document.querySelector('#verba-settings')) {
     if (!root) return;
     const google = googleFreeEngineEnabled();
+    const cli = settings.codexCliEnabled === true;
     const engineSelect = root.querySelector('#verba-translation-engine');
     const aiOptions = root.querySelector('#verba-ai-profile-options');
     const note = root.querySelector('#verba-translation-engine-note');
     const testButton = root.querySelector('#verba-test-profile');
-    if (engineSelect instanceof HTMLSelectElement) engineSelect.value = google ? 'google-free' : 'ai';
-    if (aiOptions) aiOptions.hidden = google;
+    if (engineSelect instanceof HTMLSelectElement) {
+        engineSelect.value = settings.translationEngine === 'google-free' ? 'google-free' : 'ai';
+        engineSelect.disabled = cli;
+    }
+    const cliOptions = root.querySelector('#verba-codex-options');
+    if (cliOptions) cliOptions.hidden = !cli;
+    if (aiOptions) {
+        aiOptions.hidden = google;
+        aiOptions.disabled = cli;
+    }
     if (note) {
-        note.textContent = google
+        note.textContent = cli ? '선택한 Codex CLI 모델로 번역해요.' : google
             ? 'API 키 없이 무료 Google 번역을 사용해요. 긴 글은 자동 분할됩니다. 비공식 요청 방식이라 예고 없이 막힐 수 있으며, 프롬프트·맛 기능·선택 재번역은 적용되지 않습니다.'
             : 'SillyTavern 연결 프로필의 AI 모델로 번역해요. 프롬프트·말투·맛 기능과 선택 재번역을 사용할 수 있습니다.';
     }
-    if (testButton) testButton.textContent = google ? '무료 Google 번역 테스트' : '현재 AI 연결 테스트';
+    if (testButton && !testButton.disabled) testButton.textContent = google ? '무료 Google 번역 테스트' : '현재 AI 연결 테스트';
+    if (cli) {
+        renderCodexChoices(root);
+        void loadCodexChoices(root);
+    }
     refreshProfileToggleButton();
 }
 
@@ -3350,10 +3433,12 @@ function wait(ms, signal) {
 }
 
 async function sendProfileRequest(prompt, options = {}) {
+    const cli = settings.codexCliEnabled === true;
+    const cliConfig = cli ? { model: settings.codexCliModel, reasoning: settings.codexCliReasoning } : null;
     const profileId = String(options.profileId ?? settings.profileId ?? '');
-    if (!profileId) throw new Error('번역기 전용 연결 프로필을 선택해 주세요.');
-    const profileSlot = String(options.profileSlot || profileSlotForId(profileId));
-    const availableProfiles = profileList();
+    if (!cli && !profileId) throw new Error('번역기 전용 연결 프로필을 선택해 주세요.');
+    const profileSlot = cli ? 'CLI' : String(options.profileSlot || profileSlotForId(profileId));
+    const availableProfiles = cli ? [] : profileList();
     if (availableProfiles.length && !availableProfiles.some(profile => profile.id === profileId)) {
         throw new Error(`프로필 ${profileSlot}의 저장된 연결 프로필을 찾을 수 없습니다. 새로고침 후 다시 선택해 주세요.`);
     }
@@ -3371,7 +3456,7 @@ async function sendProfileRequest(prompt, options = {}) {
     const timeoutOverride = Number(options.timeoutSecondsOverride);
     const timeoutSeconds = Number.isFinite(timeoutOverride) && timeoutOverride > 0
         ? Math.min(3600, Math.max(20, timeoutOverride))
-        : normalizedProfileFailureTimeoutSeconds();
+        : cli ? 185 : normalizedProfileFailureTimeoutSeconds();
     let timedOut = false;
     let timer = null;
     let removeHardStopAbort = null;
@@ -3397,8 +3482,8 @@ async function sendProfileRequest(prompt, options = {}) {
     try {
         const executeRequest = async () => {
             if (controller.signal.aborted) throw abortError();
-            const service = liveContext().ConnectionManagerRequestService;
-            if (!service?.sendRequest) throw new Error('실리태번 연결 관리자 요청 기능을 찾을 수 없습니다.');
+            const service = cli ? null : liveContext().ConnectionManagerRequestService;
+            if (!cli && !service?.sendRequest) throw new Error('실리태번 연결 관리자 요청 기능을 찾을 수 없습니다.');
 
             // Some ConnectionManager/provider implementations do not actually
             // settle their Promise when AbortSignal is aborted. In that case a
@@ -3409,6 +3494,7 @@ async function sendProfileRequest(prompt, options = {}) {
                 if (controller.signal.aborted) throw abortError();
                 outputTiming.sent(options.timing, timingRequest);
                 wire?.request();
+                if (cli) return sendCodexRequest(prompt, { ...cliConfig, signal: controller.signal });
                 return service.sendRequest(
                     profileId,
                     [{ role: 'user', content: prompt }],
@@ -3478,7 +3564,7 @@ async function sendProfileRequest(prompt, options = {}) {
         outerSignal?.removeEventListener?.('abort', forwardAbort);
         // A user/internal abort is neither a provider success nor a provider
         // failure, so keep it out of the connection performance statistics.
-        if (!outerSignal?.aborted) {
+        if (!cli && !outerSignal?.aborted) {
             recordProfileAttempt(profileSlot, {
                 success: attemptSucceeded,
                 elapsedMs: performance.now() - startedAt,
@@ -3754,6 +3840,13 @@ async function sendWithRetry(prompt, options = {}) {
     /* SERVER_DISPATCH_BEGIN */
     if (settings.serverTranslation === true && await verbaServer.available()) { return verbaServer.run("request", prompt, options); }
     /* SERVER_DISPATCH_END */
+    if (settings.codexCliEnabled === true) {
+        const customPrompt = applyCustomTranslatorPrompt(prompt, options);
+        const outgoingPrompt = options.previousUserSource
+            ? appendPreviousUserContext(customPrompt, options.previousUserSource)
+            : customPrompt;
+        return sendProfileRequest(outgoingPrompt, options);
+    }
     const maxRetries = normalizedServerRetryLimit(settings.serverRetryLimit);
     const token = Symbol('verba-translation-retry');
     const outerSignal = options.signal || null;
@@ -3906,7 +3999,7 @@ async function requestSegments(prompt, expectedSegments, options = {}) {
     /* SERVER_DISPATCH_BEGIN */
     if (settings.serverTranslation === true && await verbaServer.available()) { return new Map(await verbaServer.run("segments", prompt, options, expectedSegments)); }
     /* SERVER_DISPATCH_END */
-    const googleOptions = typeof settings !== 'undefined' && settings.translationEngine === 'google-free'
+    const googleOptions = typeof settings !== 'undefined' && settings.codexCliEnabled !== true && settings.translationEngine === 'google-free'
         ? googleFreeStageOptions(options.stage)
         : null;
     if (googleOptions) {
@@ -4619,7 +4712,7 @@ function nameTokensForSegments(segmented, segments) {
 async function requestScopedOutputTranslations(segmented, speakerScopes, options = {}) {
     // One unified prompt per selected split: source segments are never repeated
     // across narration/TARGET/OTHER requests. Speaker hints travel with rows.
-    const splitCount = settings.translationEngine === 'google-free' ? 1 : outputSplitCount(settings);
+    const splitCount = settings.codexCliEnabled !== true && settings.translationEngine === 'google-free' ? 1 : outputSplitCount(settings);
     if (splitCount > 1 && !options.splitBatchCount) {
         return runOutputBatches(segmented, splitCount, options, (segments, batchOptions) =>
             requestScopedOutputTranslations({
@@ -5179,13 +5272,13 @@ async function reviewFinalEnglish({ segmented, translations, speakerIdentity = {
  * 20-second / 512-token decision request.
  */
 async function planBilingualDialogueVerdicts(segmented, options = {}) {
-    if (settings.translationEngine === 'google-free') return;
+    if (settings.codexCliEnabled !== true && settings.translationEngine === 'google-free') return;
     if (!segmented?.segments?.some(item => item.type === 'dialogue_candidate')) return;
     const pending = bilingualPromptsNeedingVerdict(settings)
         .filter(prompt => !hasExplicitNonDialogueBilingualScope(prompt));
     if (!pending.length) return;
     const profiles = configuredProfileCycle();
-    if (!profiles.active) return;
+    if (!profiles.active && settings.codexCliEnabled !== true) return;
     for (const prompt of pending) {
         if (options.signal?.aborted) throw abortError();
         await resolveBilingualIntent(prompt, async (text, sharedSignal) => {
@@ -6235,7 +6328,7 @@ async function translateMessage(messageId, options = {}) {
         if (!options.automatic) notify('번역할 외국어 원문이 없어요.', 'warning');
         return;
     }
-    if (settings.translationEngine !== 'google-free' && !settings.profileId) {
+    if (settings.translationEngine !== 'google-free' && !settings.profileId && settings.codexCliEnabled !== true) {
         if (!options.automatic) notify('먼저 번역기 전용 연결 프로필을 선택해 주세요.', 'warning');
         return;
     }
@@ -9476,7 +9569,7 @@ async function retranslateSelectionBundle() {
     const state = multiSelectionState;
     if (!state || selectionBusy) return;
     if (!requireAiEngineForFeature('묶음 선택 재번역')) return;
-    if (!settings.profileId) {
+    if (!settings.profileId && settings.codexCliEnabled !== true) {
         notify('먼저 번역기 전용 연결 프로필을 선택해 주세요.', 'warning');
         return;
     }
@@ -9642,7 +9735,7 @@ async function lockSelectionName(snapshot) {
         let sourceName = resolveSelectionSourceNameLocally(matchContext);
         if (!sourceName) {
             if (!requireAiEngineForFeature('선택 이름 찾기')) return;
-            if (!settings.profileId) {
+            if (!settings.profileId && settings.codexCliEnabled !== true) {
                 notify('원문 이름을 AI로 찾으려면 먼저 번역기 전용 연결 프로필을 선택해 주세요.', 'warning');
                 return;
             }
@@ -9664,7 +9757,7 @@ async function lockSelectionName(snapshot) {
         toast = null;
         const previousTarget = normalizedCharacterNameLocks()
             .find(row => row.source.toLocaleLowerCase() === sourceName.toLocaleLowerCase())?.target || '';
-        const canUseAiHistory = settings.translationEngine !== 'google-free' && Boolean(settings.profileId);
+        const canUseAiHistory = settings.codexCliEnabled === true || (settings.translationEngine !== 'google-free' && Boolean(settings.profileId));
         const choice = await requestNameLockTarget(sourceName, currentName, { canUseAiHistory });
         if (choice === null) return;
         const { targetName, replaceHistory, useAiHistory } = choice;
@@ -9750,7 +9843,7 @@ async function lockSelectionName(snapshot) {
 async function retranslateSelection(snapshot) {
     if (!snapshot || selectionBusy) return;
     if (!requireAiEngineForFeature('선택 재번역')) return;
-    if (!settings.profileId) {
+    if (!settings.profileId && settings.codexCliEnabled !== true) {
         notify('먼저 번역기 전용 연결 프로필을 선택해 주세요.', 'warning');
         return;
     }
@@ -10418,7 +10511,7 @@ function refreshProfileToggleButton() {
     if (!button) return;
     const profiles = configuredProfileCycle();
     const configured = configuredProfiles();
-    const canSwitch = aiTranslationEngineEnabled() && configured.length >= 2;
+    const canSwitch = settings.codexCliEnabled !== true && aiTranslationEngineEnabled() && configured.length >= 2;
     button.hidden = !canSwitch;
     button.querySelector('.verba-profile-slot').textContent = profiles.slot;
     button.classList.toggle('verba-profile-b', profiles.slot === 'B');
@@ -10623,6 +10716,7 @@ function injectInputAction() {
 
 async function testConnection(button) {
     const oldText = button.textContent;
+    const cli = settings.codexCliEnabled === true;
     button.disabled = true;
     button.textContent = '테스트 중…';
     try {
@@ -10636,14 +10730,14 @@ async function testConnection(button) {
             return;
         }
 
-        if (!settings.profileId) {
+        if (!cli && !settings.profileId) {
             notify('먼저 연결 프로필을 선택해 주세요.', 'warning');
             return;
         }
         const profiles = configuredProfileCycle();
         const profileId = profiles.active;
         const profileSlot = profiles.slot;
-        if (!profileId) throw new Error('테스트할 현재 연결 프로필이 없어요.');
+        if (!cli && !profileId) throw new Error('테스트할 현재 연결 프로필이 없어요.');
         const source = '안녕하세요.';
         const expected = [{ id: 'seg_0000', type: 'user_input', text: source }];
         const targetGender = detectCharacterGender(currentCharacterReference()?.character);
@@ -10656,7 +10750,7 @@ async function testConnection(button) {
         });
         const translated = String(parseSegmentResponse(extractResponseText(response), expected).get('seg_0000') || '').trim();
         if (!translated) throw new Error('테스트 응답이 비어 있습니다.');
-        notify(`프로필 ${profileSlot} 연결 성공: ${translated}`, 'success');
+        notify(cli ? `Codex CLI 연결 성공: ${translated}` : `프로필 ${profileSlot} 연결 성공: ${translated}`, 'success');
     } catch (error) {
         if (!isAbort(error)) {
             const profiles = configuredProfileCycle();
@@ -10665,7 +10759,7 @@ async function testConnection(button) {
             reportError(
                 'connection-test',
                 error,
-                googleFreeEngineEnabled()
+                cli ? `Codex CLI 연결 실패: ${errorText(error)}` : googleFreeEngineEnabled()
                     ? `무료 Google 번역 연결 실패: ${errorText(error)}`
                     : `프로필 ${profileSlot} “${profileDisplayName(profileId)}” 연결 실패: ${errorText(error)}`,
             );
@@ -11542,7 +11636,19 @@ function injectSettingsPanel() {
                 </select>
                 <div id="verba-translation-engine-note" class="verba-help"></div>
 
-                <div id="verba-ai-profile-options">
+                <label class="verba-check-row">
+                    <input type="checkbox" id="verba-codex-enabled" ${settings.codexCliEnabled === true ? 'checked' : ''}>
+                    <span>Codex CLI 사용</span>
+                </label>
+                <div id="verba-codex-options" ${settings.codexCliEnabled === true ? '' : 'hidden'}>
+                    <label for="verba-codex-model">GPT 모델</label>
+                    <select id="verba-codex-model" class="text_pole"></select>
+                    <label for="verba-codex-reasoning">리즈닝 강도</label>
+                    <select id="verba-codex-reasoning" class="text_pole"></select>
+                    <div id="verba-codex-catalog-status" class="verba-help" role="status"></div>
+                </div>
+
+                <fieldset id="verba-ai-profile-options" class="verba-codex-legacy-options">
                 <label for="verba-profile">연결 프로필 A</label>
                 <div class="verba-profile-row">
                     <select id="verba-profile" class="text_pole"></select>
@@ -11597,7 +11703,7 @@ function injectSettingsPanel() {
                     </div>
                     <div class="verba-help">최초 프로필 호출부터 계산해 입력한 시간이 지나면 경주 중인 A·B·C 요청을 모두 종료해요. 마지막 입력값은 저장됩니다.</div>
                 </div>
-                </div>
+                </fieldset>
                 <button type="button" id="verba-test-profile" class="menu_button verba-wide">현재 번역 엔진 테스트</button>
                     </div>
                 </details>
@@ -12688,6 +12794,22 @@ function injectSettingsPanel() {
                 : 'AI 연결 프로필 번역을 사용합니다.',
             'info',
         );
+    });
+
+    panel.querySelector('#verba-codex-enabled').addEventListener('change', event => {
+        settings.codexCliEnabled = event.target.checked;
+        syncTranslationEngineUi(panel);
+        saveSettings();
+    });
+    panel.querySelector('#verba-codex-model').addEventListener('change', event => {
+        settings.codexCliModel = event.target.value;
+        settings.codexCliReasoning = '';
+        renderCodexChoices(panel);
+        saveSettings();
+    });
+    panel.querySelector('#verba-codex-reasoning').addEventListener('change', event => {
+        settings.codexCliReasoning = event.target.value;
+        saveSettings();
     });
 
     panel.querySelector('#verba-profile').addEventListener('change', event => {

@@ -173,7 +173,7 @@ export function createServerClient({variant,version,getSettings,getContext,isAct
         const value=clean(getSnapshot());
         value.variant=variant;
         value.version=version;
-        value.profiles=value.settings.translationEngine==='google-free'?{}:await captureConnectionProfiles(getContext(),[
+        value.profiles=(variant==='verba'&&value.settings.codexCliEnabled===true)||value.settings.translationEngine==='google-free'?{}:await captureConnectionProfiles(getContext(),[
             value.settings.profileId,value.settings.fallbackProfileId,value.settings.thirdProfileId]);
         return value;
     }

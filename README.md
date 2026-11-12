@@ -1,5 +1,11 @@
 # 베르바
 
+## Codex CLI 테스트 포크 · 2026-11-12
+
+이 버전은 담은(foreverharibo-boop)의 [베르바](https://github.com/foreverharibo-boop/verba)에서 분기했습니다.
+번역 모델 선택란에 Codex CLI 연결을 추가했습니다. 설치 및 연결 테스트 방법은 [CODEX-CLI.md](CODEX-CLI.md)를 참고하세요.
+원작자와 라이선스 고지는 [NOTICE](NOTICE)와 [LICENSE](LICENSE)에 있습니다.
+
 ## 0.6.143 · NPC·회상 대사의 화자 오인 방지
 
 - 다른 이름의 발화나 회상·인용 단서가 있으면 이전 캐릭터의 말투를 확정 적용하지 않고, 기존 번역 요청에서 화자를 판단하도록 전달합니다. 명확한 캐릭터 직접 대사와 이름 고정은 유지합니다.

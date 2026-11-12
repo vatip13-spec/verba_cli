@@ -4,7 +4,7 @@ set -euo pipefail
 ST_ROOT="${1:-$HOME/SillyTavern}"
 PLUGINS_DIR="$ST_ROOT/plugins"
 DEST="$PLUGINS_DIR/verba-server"
-REPO_URL="${VERBA_SERVER_REPO_URL:-https://github.com/foreverharibo-boop/verba.git}"
+REPO_URL="${VERBA_SERVER_REPO_URL:-https://github.com/vatip13-spec/verba_cli.git}"
 REPO_BRANCH="${VERBA_SERVER_REPO_BRANCH:-main}"
 BACKUP_ROOT="$ST_ROOT/.verba-server-backups"
 STAMP="$(date +%Y%m%d-%H%M%S)"
@@ -65,9 +65,9 @@ NODE
 accepted_remote() {
   local remote="$1"
   [ "$remote" = "$REPO_URL" ] \
-    || [ "$remote" = "https://github.com/foreverharibo-boop/verba.git" ] \
-    || [ "$remote" = "https://github.com/foreverharibo-boop/verba" ] \
-    || [ "$remote" = "git@github.com:foreverharibo-boop/verba.git" ]
+    || [ "$remote" = "https://github.com/vatip13-spec/verba_cli.git" ] \
+    || [ "$remote" = "https://github.com/vatip13-spec/verba_cli" ] \
+    || [ "$remote" = "git@github.com:vatip13-spec/verba_cli.git" ]
 }
 
 updated=false

@@ -17,7 +17,7 @@ function retainedBytes(job) {
     return bytes;
 }
 const digest = value => createHash('sha256').update(JSON.stringify(value)).digest('hex');
-function createJobs({ engines, request, profileRequest, versions, now = Date.now, retention = 86400000, maxJobs = 32, maxActive = 4, prepareNotification = () => null, onLifecycle = () => {} }) {
+function createJobs({ engines, request, profileRequest, codexRequest, versions, now = Date.now, retention = 86400000, maxJobs = 32, maxActive = 4, prepareNotification = () => null, onLifecycle = () => {} }) {
     const jobs = new Map();
     const key = (owner,id) => JSON.stringify([owner,id]);
     function prune() {
@@ -94,7 +94,16 @@ function createJobs({ engines, request, profileRequest, versions, now = Date.now
         });
         job.done=(async()=>{
             try {
-                const engine=engines[snapshot.variant].createEngine(snapshot,(...args)=>profileRequest(connection,snapshot.profiles,...args),e=>report(job,e));
+                const transport = (id, messages, maxTokens, requestOptions) => {
+                    if (snapshot.variant === 'verba' && snapshot.settings.codexCliEnabled === true) {
+                        return codexRequest(messages[0]?.content, {
+                            model: snapshot.settings.codexCliModel,
+                            reasoning: snapshot.settings.codexCliReasoning,
+                        }, requestOptions);
+                    }
+                    return profileRequest(connection, snapshot.profiles, id, messages, maxTokens, requestOptions);
+                };
+                const engine=engines[snapshot.variant].createEngine(snapshot,transport,e=>report(job,e));
                 if(['generation','observed-generation'].includes(kind)) {
                     job.state='generating';
                     const timeout=setTimeout(()=>controller.abort(),20*60*1000);timeout.unref?.();

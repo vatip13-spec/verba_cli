@@ -17,6 +17,7 @@ const overrides = {
     liveContext: 'function liveContext() { return { ...snapshot.context, ConnectionManagerRequestService: { sendRequest: transport } }; }',
     normalizedCharacterNameLocks: 'function normalizedCharacterNameLocks() { return snapshot.nameLocks || []; }',
     currentCharacterReference: 'function currentCharacterReference() { return { character: snapshot.character || {} }; }',
+    sendCodexRequest: "function sendCodexRequest(prompt, options) { return transport('', [{ role: 'user', content: prompt }], 0, options); }",
     profileList: 'function profileList() { return Object.keys(snapshot.profiles || {}).map(id => ({ id, name: id })); }',
     recordProfileAttempt: "function recordProfileAttempt(slot, data) { report({ kind: 'profile', slot, success: data.success, elapsedMs: data.elapsedMs, retry: data.retry, fallback: data.fallback }); }",
     updateServerRetryIndicator: "function updateServerRetryIndicator() { report({ kind: 'retry', requests: [...serverRetryStates.values()].map(({retryCount,maxRetries,delayMs,updatedAt}) => ({retryCount,maxRetries,delayMs,updatedAt})) }); }",

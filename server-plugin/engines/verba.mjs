@@ -5229,6 +5229,9 @@ function createEngine(snapshot, transport, report = () => {
     }
     return null;
   }
+  function sendCodexRequest(prompt, options) {
+    return transport("", [{ role: "user", content: prompt }], 0, options);
+  }
   function enqueueRequest(task) {
     const run = requestTail.then(task, task);
     requestTail = run.catch(() => {
@@ -5345,10 +5348,12 @@ function createEngine(snapshot, transport, report = () => {
     });
   }
   async function sendProfileRequest(prompt, options = {}) {
+    const cli = settings.codexCliEnabled === true;
+    const cliConfig = cli ? { model: settings.codexCliModel, reasoning: settings.codexCliReasoning } : null;
     const profileId = String(options.profileId ?? settings.profileId ?? "");
-    if (!profileId) throw new Error("\uBC88\uC5ED\uAE30 \uC804\uC6A9 \uC5F0\uACB0 \uD504\uB85C\uD544\uC744 \uC120\uD0DD\uD574 \uC8FC\uC138\uC694.");
-    const profileSlot = String(options.profileSlot || profileSlotForId(profileId));
-    const availableProfiles = profileList();
+    if (!cli && !profileId) throw new Error("\uBC88\uC5ED\uAE30 \uC804\uC6A9 \uC5F0\uACB0 \uD504\uB85C\uD544\uC744 \uC120\uD0DD\uD574 \uC8FC\uC138\uC694.");
+    const profileSlot = cli ? "CLI" : String(options.profileSlot || profileSlotForId(profileId));
+    const availableProfiles = cli ? [] : profileList();
     if (availableProfiles.length && !availableProfiles.some((profile) => profile.id === profileId)) {
       throw new Error(`\uD504\uB85C\uD544 ${profileSlot}\uC758 \uC800\uC7A5\uB41C \uC5F0\uACB0 \uD504\uB85C\uD544\uC744 \uCC3E\uC744 \uC218 \uC5C6\uC2B5\uB2C8\uB2E4. \uC0C8\uB85C\uACE0\uCE68 \uD6C4 \uB2E4\uC2DC \uC120\uD0DD\uD574 \uC8FC\uC138\uC694.`);
     }
@@ -5363,7 +5368,7 @@ function createEngine(snapshot, transport, report = () => {
     const forwardAbort = () => controller.abort();
     outerSignal?.addEventListener?.("abort", forwardAbort, { once: true });
     const timeoutOverride = Number(options.timeoutSecondsOverride);
-    const timeoutSeconds = Number.isFinite(timeoutOverride) && timeoutOverride > 0 ? Math.min(3600, Math.max(20, timeoutOverride)) : normalizedProfileFailureTimeoutSeconds();
+    const timeoutSeconds = Number.isFinite(timeoutOverride) && timeoutOverride > 0 ? Math.min(3600, Math.max(20, timeoutOverride)) : cli ? 185 : normalizedProfileFailureTimeoutSeconds();
     let timedOut = false;
     let timer = null;
     let removeHardStopAbort = null;
@@ -5387,12 +5392,13 @@ function createEngine(snapshot, transport, report = () => {
     try {
       const executeRequest = async () => {
         if (controller.signal.aborted) throw abortError2();
-        const service = liveContext().ConnectionManagerRequestService;
-        if (!service?.sendRequest) throw new Error("\uC2E4\uB9AC\uD0DC\uBC88 \uC5F0\uACB0 \uAD00\uB9AC\uC790 \uC694\uCCAD \uAE30\uB2A5\uC744 \uCC3E\uC744 \uC218 \uC5C6\uC2B5\uB2C8\uB2E4.");
+        const service = cli ? null : liveContext().ConnectionManagerRequestService;
+        if (!cli && !service?.sendRequest) throw new Error("\uC2E4\uB9AC\uD0DC\uBC88 \uC5F0\uACB0 \uAD00\uB9AC\uC790 \uC694\uCCAD \uAE30\uB2A5\uC744 \uCC3E\uC744 \uC218 \uC5C6\uC2B5\uB2C8\uB2E4.");
         const request = Promise.resolve().then(() => {
           if (controller.signal.aborted) throw abortError2();
           outputTiming.sent(options.timing, timingRequest);
           wire?.request();
+          if (cli) return sendCodexRequest(prompt, { ...cliConfig, signal: controller.signal });
           return service.sendRequest(
             profileId,
             [{ role: "user", content: prompt }],
@@ -5447,7 +5453,7 @@ function createEngine(snapshot, transport, report = () => {
       if (timer) clearTimeout(timer);
       removeHardStopAbort?.();
       outerSignal?.removeEventListener?.("abort", forwardAbort);
-      if (!outerSignal?.aborted) {
+      if (!cli && !outerSignal?.aborted) {
         recordProfileAttempt(profileSlot, {
           success: attemptSucceeded,
           elapsedMs: performance.now() - startedAt,
@@ -5678,6 +5684,11 @@ ${original}`;
     });
   }
   async function sendWithRetry(prompt, options = {}) {
+    if (settings.codexCliEnabled === true) {
+      const customPrompt2 = applyCustomTranslatorPrompt(prompt, options);
+      const outgoingPrompt2 = options.previousUserSource ? appendPreviousUserContext(customPrompt2, options.previousUserSource) : customPrompt2;
+      return sendProfileRequest(outgoingPrompt2, options);
+    }
     const maxRetries = normalizedServerRetryLimit(settings.serverRetryLimit);
     const token2 = /* @__PURE__ */ Symbol("verba-translation-retry");
     const outerSignal = options.signal || null;
@@ -5800,7 +5811,7 @@ ${original}`;
     return collectSegmentResponse(raw, expectedSegments);
   }
   async function requestSegments(prompt, expectedSegments, options = {}) {
-    const googleOptions = typeof settings !== "undefined" && settings.translationEngine === "google-free" ? googleFreeStageOptions(options.stage) : null;
+    const googleOptions = typeof settings !== "undefined" && settings.codexCliEnabled !== true && settings.translationEngine === "google-free" ? googleFreeStageOptions(options.stage) : null;
     if (googleOptions) {
       return translateGoogleFreeSegments(expectedSegments, {
         ...googleOptions,
@@ -6211,7 +6222,7 @@ STILL-MISSING IDS: ${JSON.stringify(missingIds)}` : "";
     return (segmented?.nameTokens || []).filter((entry) => source.includes(String(entry?.token || "")));
   }
   async function requestScopedOutputTranslations(segmented, speakerScopes, options = {}) {
-    const splitCount = settings.translationEngine === "google-free" ? 1 : outputSplitCount(settings);
+    const splitCount = settings.codexCliEnabled !== true && settings.translationEngine === "google-free" ? 1 : outputSplitCount(settings);
     if (splitCount > 1 && !options.splitBatchCount) {
       return runOutputBatches(segmented, splitCount, options, (segments, batchOptions) => requestScopedOutputTranslations({
         ...segmented,
@@ -6598,12 +6609,12 @@ ${settings.allDialoguePrompt || ""}`.toLocaleLowerCase();
     }
   }
   async function planBilingualDialogueVerdicts(segmented, options = {}) {
-    if (settings.translationEngine === "google-free") return;
+    if (settings.codexCliEnabled !== true && settings.translationEngine === "google-free") return;
     if (!segmented?.segments?.some((item) => item.type === "dialogue_candidate")) return;
     const pending = bilingualPromptsNeedingVerdict(settings).filter((prompt) => !hasExplicitNonDialogueBilingualScope(prompt));
     if (!pending.length) return;
     const profiles = configuredProfileCycle();
-    if (!profiles.active) return;
+    if (!profiles.active && settings.codexCliEnabled !== true) return;
     for (const prompt of pending) {
       if (options.signal?.aborted) throw abortError2();
       await resolveBilingualIntent(prompt, async (text, sharedSignal) => {

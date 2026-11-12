@@ -94,7 +94,7 @@
 Verba Server는 SillyTavern 구조상 `SillyTavern/plugins/verba-server` 폴더에 있어야 하지만, 이제 그 폴더 자체가 Git 저장소입니다. 최초 한 번만 아래 설치 스크립트를 실행하세요.
 
 ```bash
-bash "$HOME/SillyTavern/data/default-user/extensions/verba/install-server.sh" "$HOME/SillyTavern"
+bash "$HOME/SillyTavern/data/default-user/extensions/verba_cli/install-server.sh" "$HOME/SillyTavern"
 ```
 
 기존의 복사 설치 폴더는 삭제하지 않고 `SillyTavern/.verba-server-backups`로 이동합니다. 이후에는 SillyTavern 시작 시 자동 업데이트되며, 수동으로는 SillyTavern 루트에서 `node plugins.js update`를 실행하면 됩니다. 서버 번역 설정이 OFF이면 플러그인이 설치되어 있어도 신규 서버 번역 작업을 만들지 않습니다.
@@ -161,7 +161,7 @@ Silly Relay를 함께 켜서 사용한다면 메인의 서버 1.0.6 이상이 �
 2. 터먹스에서 해당 확장 폴더의 `install-server.sh`를 실행합니다. 예:
 
    ```bash
-   cd ~/SillyTavern/data/default-user/extensions/verba
+   cd ~/SillyTavern/data/default-user/extensions/verba_cli
    bash install-server.sh ~/SillyTavern
    ```
 

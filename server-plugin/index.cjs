@@ -3,6 +3,7 @@ const path = require('node:path');
 const {pathToFileURL} = require('node:url');
 const {createJobs} = require('./jobs.cjs');
 const provider = require('./provider.cjs');
+const { mountCodexRoutes, translateCodex } = require('./codex-cli.cjs');
 const manifest = require('./engines/manifest.json');
 const packageInfo = require('./package.json');
 const { prepareSelected } = require('./notification-routing.cjs');
@@ -18,7 +19,7 @@ module.exports.info={id:'verba-server',name:'Verba Server',description:'선택�
 module.exports.init=async router=>{
     const engines={};
     for(const variant of Object.keys(manifest.engines)) engines[variant]=await import(pathToFileURL(path.join(__dirname,'engines',variant+'.mjs')).href);
-    jobs=createJobs({engines,request:provider.requestLocal,profileRequest:provider.sendProfile,versions:manifest.engines,
+    jobs=createJobs({engines,request:provider.requestLocal,profileRequest:provider.sendProfile,codexRequest:translateCodex,versions:manifest.engines,
         onLifecycle(event) {
             const labels={accepted:'작업 접수',translation_started:'번역 시작',completed:'번역 완료',skipped:'번역 생략',failed:'작업 실패',cancelled:'작업 취소'};
             console.info(`[Verba Server] ${new Date(event.at).toISOString()} ${event.id.slice(0,8)} ${event.kind} · ${labels[event.stage]} · ${event.elapsedMs}ms`);
@@ -29,6 +30,7 @@ module.exports.init=async router=>{
         translationNotification:(owner,id)=>jobs.lookup(owner,id).translationNotification,
         binding:(owner,id)=>{const job=jobs.lookup(owner,id);return {id:job.id,variant:job.variant,config:job.clientConfig};}};
     globalThis[Symbol.for('verba.relay-observer')]=observer;
+    mountCodexRoutes(router, owner, route);
     router.get('/capabilities',route(req=>{owner(req);return{protocol:1,notificationRouting:true,version:packageInfo.version,engines:manifest.engines,retentionSeconds:86400,relayObserver:globalThis[Symbol.for('verba.relay-capability')]===1};}));
     router.post('/jobs',route(req=>jobs.status(jobs.start(owner(req),req.body,provider.ownConnection(req)))));
     router.get('/jobs/:id',route(req=>jobs.status(jobs.lookup(owner(req),req.params.id),req.query.cursor)));
